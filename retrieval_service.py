@@ -8,6 +8,9 @@ import torch
 import traceback
 from sentence_transformers import util
 
+# --- تم نقل الاستيراد هنا في أعلى الملف لحل خطأ الـ Pickle والمساحة الاسمية للأبد ---
+from sklearn.feature_extraction.text import TfidfVectorizer
+
 app = FastAPI(title="Retrieval & Ranking Service")
 
 class SearchRequest(BaseModel):
@@ -53,7 +56,7 @@ def load_resources(dataset_name):
     global current_dataset_name, df_subset, bm25_model, model, embeddings, tfidf_vectorizer, tfidf_matrix
     
     if current_dataset_name == dataset_name and df_subset is not None and 'cluster_id' in df_subset.columns:
-        return
+        return # إذا كانت المجموعة محملة وبها كلوستر فلا نعيد تحميلها
         
     print(f"🔄 جاري تحميل نماذج وفهارس مجموعة البيانات: ({dataset_name})...")
     suffix = "_2" if dataset_name == "argsme" else ""
@@ -62,10 +65,10 @@ def load_resources(dataset_name):
     df_temp['cleaned_text'] = df_temp['cleaned_text'].fillna('')
     df_subset = df_temp.copy()
     
-    # تحميل فهارس TF-IDF (VSM)
+    # تحميل فهارس TF-IDF (VSM) بنجاح بعد تأمين الاستيراد العالمي
     with open(f'tfidf_model{suffix}.pkl', 'rb') as f:
         tfidf_vectorizer, raw_tfidf_matrix = pickle.load(f)
-    # قص المصفوفة لتطابق أول 20,000 مستند
+    # قص مصفوفة TF-IDF لتطابق أول 20,000 مستند
     tfidf_matrix = raw_tfidf_matrix[:subset_size]
     
     with open(f'bm25_model{suffix}.pkl', 'rb') as f:
@@ -76,6 +79,7 @@ def load_resources(dataset_name):
         model = bert_data['model']
         raw_embeddings = bert_data['embeddings']
         
+    # تأمين تحويل المتجهات الدلالية
     if isinstance(raw_embeddings, np.ndarray):
         embeddings = torch.from_numpy(raw_embeddings).cpu()
     else:
@@ -111,7 +115,6 @@ def api_search(req: SearchRequest):
         if req.hybrid_type == "TF-IDF":
             # تمثيل الاستعلام كمتجه جيب تمام
             query_vec = tfidf_vectorizer.transform([req.cleaned_query])
-            # حساب مصفوفة جيب التمام للمستندات المصفاة
             sub_matrix = tfidf_matrix[matching_indices]
             scores_array = np.array((sub_matrix * query_vec.T).toarray()).flatten()
             

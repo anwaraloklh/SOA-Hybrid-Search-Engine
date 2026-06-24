@@ -1,6 +1,7 @@
 # ui_gateway.py
 import gradio as gr
 import requests
+import os
 
 PREPROCESSING_URL = "http://127.0.0.1:8001"
 RETRIEVAL_URL = "http://127.0.0.1:8002"
@@ -32,7 +33,6 @@ def search_gateway(query, dataset_choice, hybrid_type, search_mode, cluster_choi
             cluster_filter = cluster_choice.split(" ")[0] + " " + cluster_choice.split(" ")[1]
             
         # خريطة تبديل أسماء الخوارزميات للتوافق مع الـ API
-        # hybrid_type يمكن أن يكون: "TF-IDF (VSM)", "BM25 Only", "BERT Only (Semantic)", "Parallel Hybrid (التفرعي)", "Serial Hybrid (التسلسلي)"
         api_hybrid_type = "Serial"
         if "TF-IDF" in hybrid_type:
             api_hybrid_type = "TF-IDF"
@@ -69,7 +69,7 @@ def search_gateway(query, dataset_choice, hybrid_type, search_mode, cluster_choi
             <div style='border-bottom: 1px solid #e0e0e0; padding: 15px 0;'>
                 <div style='color: #1a0dab; font-size: 18px; font-weight: 500;'>#{i+1}. Document ID: {doc['cleaned_doc_id']}</div>
                 <div style='color: #006621; font-size: 13px; margin-top: 2px;'>
-                    Relevance Score: {scores[i]:.4f} | <span style='background-color: #e8f0fe; color: #1a73e8; padding: 2px 6px; border-radius: 3px; font-weight: bold;'>Semantic Group: Topic {topic_num}</span>
+                    Combined Relevance Score: {scores[i]:.4f} | <span style='background-color: #e8f0fe; color: #1a73e8; padding: 2px 6px; border-radius: 3px; font-weight: bold;'>Semantic Group: Topic {topic_num}</span>
                 </div>
                 <div style='color: #4d4d4d; font-size: 14px; margin-top: 6px;'>{doc['text']}</div>
             </div>
@@ -81,7 +81,7 @@ def search_gateway(query, dataset_choice, hybrid_type, search_mode, cluster_choi
         return f"<div style='color:red;'>⚠️ Error connecting to SOA services: {e}</div>"
 
 
-def run_evaluation_gateway(dataset_choice, hybrid_type, alpha, k1, b):
+def run_evaluation_gateway(dataset_choice, hybrid_type, eval_mode, alpha, k1, b):
     try:
         dataset_name = "msmarco" if "MS MARCO" in dataset_choice else "argsme"
         
@@ -95,13 +95,17 @@ def run_evaluation_gateway(dataset_choice, hybrid_type, alpha, k1, b):
         elif "Parallel" in hybrid_type:
             api_hybrid_type = "Parallel"
 
+        # تحديد هل نقيم قبل أم بعد ميزة التوسيع
+        use_query_expansion = True if "Advanced" in eval_mode else False
+
         eval_payload = {
             "dataset_name": dataset_name,
             "hybrid_type": api_hybrid_type,
             "alpha": float(alpha),
             "k1": float(k1),
             "b": float(b),
-            "k": 10
+            "k": 10,
+            "use_query_expansion": use_query_expansion
         }
         
         print(f"🔄 جاري إرسال طلب التقييم لخدمة التقييم (Port 8003)...")
@@ -119,7 +123,7 @@ def run_evaluation_gateway(dataset_choice, hybrid_type, alpha, k1, b):
                     </tr>
                 </thead>
                 <tbody>
-                    <tr style='background-color: #f9f9f9;'>
+                    <tr>
                         <td style='padding: 12px; border: 1px solid #ddd; font-weight: bold;'>Precision@10</td>
                         <td style='padding: 12px; border: 1px solid #ddd; color: #2e8b57; font-weight: bold; font-size: 16px;'>{res_eval.get("Precision_at_10", 0.0):.4f}</td>
                     </tr>
@@ -127,7 +131,7 @@ def run_evaluation_gateway(dataset_choice, hybrid_type, alpha, k1, b):
                         <td style='padding: 12px; border: 1px solid #ddd; font-weight: bold;'>Recall@10</td>
                         <td style='padding: 12px; border: 1px solid #ddd; color: #2e8b57; font-weight: bold; font-size: 16px;'>{res_eval.get("Recall_at_10", 0.0):.4f}</td>
                     </tr>
-                    <tr style='background-color: #f9f9f9;'>
+                    <tr>
                         <td style='padding: 12px; border: 1px solid #ddd; font-weight: bold;'>MAP (Mean Average Precision)</td>
                         <td style='padding: 12px; border: 1px solid #ddd; color: #2e8b57; font-weight: bold; font-size: 16px;'>{res_eval.get("MAP_at_10", 0.0):.4f}</td>
                     </tr>
@@ -144,9 +148,16 @@ def run_evaluation_gateway(dataset_choice, hybrid_type, alpha, k1, b):
     except Exception as e:
         return f"<div style='color:red; text-align:center;'>⚠️ حدث خطأ أثناء الاتصال بخدمة التقييم: {e}</div>"
 
+# دالة ذكية لعرض شارت الكلوسترينغ المحفوظ في المجلد
+def get_clustering_chart():
+    chart_path = 'clustering_chart.png'
+    if os.path.exists(chart_path):
+        return chart_path
+    return None
+
 
 # 3. بناء الواجهة الرسومية الشاملة والمقسمة إلى تبويبات (Gradio Blocks)
-with gr.Blocks(title="Enterprise SOA Search Engine", theme=gr.themes.Default()) as demo:
+with gr.Blocks() as demo:
     gr.Markdown("# 🔎 Enterprise SOA Hybrid Search Engine")
     gr.Markdown("This distributed system uses independent microservices on Ports 8001, 8002, and 8003 communicating via REST APIs.")
     
@@ -195,3 +206,43 @@ with gr.Blocks(title="Enterprise SOA Search Engine", theme=gr.themes.Default()) 
                     value="Serial Hybrid (التسلسلي)",
                     label="Select Search Method to Evaluate"
                 )
+                
+                # إضافة خيار التقييم قبل وبعد تطبيق الميزات الإضافية (توسيع الاستعلام)
+                eval_mode = gr.Radio(
+                    choices=["Basic Evaluation (قبل تطبيق ميزة التوسيع)", "Advanced Evaluation with Query Expansion (بعد تطبيق ميزة التوسيع)"],
+                    value="Basic Evaluation (قبل تطبيق ميزة التوسيع)",
+                    label="Evaluation Mode (نمط التقييم - قبل وبعد الميزات)"
+                )
+                
+                eval_alpha = gr.Slider(minimum=0.0, maximum=1.0, value=0.5, step=0.1, label="Alpha Weight")
+                eval_k1 = gr.Slider(minimum=0.1, maximum=3.0, value=1.5, step=0.1, label="BM25 Parameter k1")
+                eval_b = gr.Slider(minimum=0.0, maximum=1.0, value=0.75, step=0.05, label="BM25 Parameter b")
+                eval_btn = gr.Button("Run Benchmark (بدء حساب مقاييس التقييم)", variant="primary")
+            with gr.Column():
+                eval_output = gr.HTML(label="Evaluation Metrics Table")
+                
+        eval_btn.click(
+            fn=run_evaluation_gateway,
+            inputs=[eval_dataset, eval_hybrid_type, eval_mode, eval_alpha, eval_k1, eval_b],
+            outputs=eval_output
+        )
+        
+    # التبويب الثالث: عرض شارت الكلوسترينغ والمجموعات الدلالية الملون
+    with gr.Tab("🖼️ Semantic Clusters Chart (مخطط المجموعات)"):
+        gr.Markdown("### 📊 2D Semantic Document Clustering Visualization (K-Means)")
+        gr.Markdown("This visualization shows the SBERT document embeddings reduced to 2D space using PCA. Documents are clustered into 5 distinct semantic topics using K-Means clustering.")
+        
+        with gr.Row():
+            with gr.Column():
+                show_chart_btn = gr.Button("Show Clustering Chart (عرض المخطط الدلالي)", variant="primary")
+            with gr.Column():
+                chart_image_output = gr.Image(label="K-Means Clusters Scatter Plot", type="filepath")
+                
+        show_chart_btn.click(
+            fn=get_clustering_chart,
+            inputs=[],
+            outputs=chart_image_output
+        )
+
+if __name__ == "__main__":
+    demo.launch(server_port=8000)
